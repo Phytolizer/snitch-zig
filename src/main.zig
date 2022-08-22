@@ -146,6 +146,16 @@ pub fn main() !void {
     var args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
+    if (args.len < 2) {
+        std.debug.print(
+            \\snitch [opt]
+            \\    list: lists all TODOs in the current directory
+            \\    report: reports TODOs in the current directory
+            \\
+        , .{});
+        return error.InvalidUsage;
+    }
+
     if (std.mem.eql(u8, args[1], "list")) {
         try listSubcommand(allocator);
     } else if (std.mem.eql(u8, args[1], "report")) {
