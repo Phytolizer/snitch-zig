@@ -97,8 +97,13 @@ fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
     return null;
 }
 
-fn todosOfFile(allocator: Allocator, path: []const u8) ![]Todo {
-    var todos = std.ArrayList(Todo).init(allocator);
+const VisitError = Allocator.Error;
+
+fn VisitFn(comptime State: type) type {
+    return fn (state: State, t: Todo) VisitError!void;
+}
+
+fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type, comptime visit: VisitFn(State), state: State) !void {
     var file = if (std.fs.path.isAbsolute(path))
         try std.fs.openFileAbsolute(path, .{})
     else
@@ -111,10 +116,13 @@ fn todosOfFile(allocator: Allocator, path: []const u8) ![]Todo {
         defer allocator.free(line);
 
         if (try lineAsTodo(allocator, line)) |t| {
-            try todos.append(t);
+            try visit(state, t);
         }
     }
-    return todos.toOwnedSlice();
+}
+
+fn visitTodo(todos: *std.ArrayList(Todo), t: Todo) VisitError!void {
+    try todos.append(t);
 }
 
 fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
@@ -130,9 +138,7 @@ fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
         if (entry.kind == .File) {
             const path = try std.fs.path.join(allocator, &.{ dirpath, entry.path });
             defer allocator.free(path);
-            var fileTodos = try todosOfFile(allocator, path);
-            defer allocator.free(fileTodos);
-            try todos.appendSlice(fileTodos);
+            try walkTodosOfFile(allocator, path, *std.ArrayList(Todo), visitTodo, &todos);
         }
     }
     return todos.toOwnedSlice();
