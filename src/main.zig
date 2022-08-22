@@ -100,10 +100,13 @@ fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
 const VisitError = Allocator.Error;
 
 fn VisitFn(comptime State: type) type {
-    return fn (state: State, t: Todo) VisitError!void;
+    return struct {
+        cb: fn (state: State, t: Todo) VisitError!void,
+        state: State,
+    };
 }
 
-fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type, comptime visit: VisitFn(State), state: State) !void {
+fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type, visit: VisitFn(State)) !void {
     var file = if (std.fs.path.isAbsolute(path))
         try std.fs.openFileAbsolute(path, .{})
     else
@@ -111,12 +114,12 @@ fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type,
     defer file.close();
 
     while (true) {
-        var line = try readLine(allocator, file.reader()) orelse
-            break;
+        var maybeLine = try readLine(allocator, file.reader());
+        var line = maybeLine orelse break;
         defer allocator.free(line);
 
         if (try lineAsTodo(allocator, line)) |t| {
-            try visit(state, t);
+            try visit.cb(visit.state, t);
         }
     }
 }
@@ -138,7 +141,7 @@ fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
         if (entry.kind == .File) {
             const path = try std.fs.path.join(allocator, &.{ dirpath, entry.path });
             defer allocator.free(path);
-            try walkTodosOfFile(allocator, path, *std.ArrayList(Todo), visitTodo, &todos);
+            try walkTodosOfFile(allocator, path, @TypeOf(&todos), .{ .cb = visitTodo, .state = &todos });
         }
     }
     return todos.toOwnedSlice();
