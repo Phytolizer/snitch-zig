@@ -1,6 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.build.Builder) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -14,6 +15,7 @@ pub fn build(b: *std.build.Builder) void {
     const exe = b.addExecutable("snitch-zig", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    try linkPcre(exe);
     exe.install();
 
     const run_cmd = exe.run();
@@ -31,4 +33,15 @@ pub fn build(b: *std.build.Builder) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&exe_tests.step);
+}
+
+fn linkPcre(exe: *std.build.LibExeObjStep) !void {
+    exe.linkLibC();
+    switch (builtin.os.tag) {
+        .windows => {
+            try exe.addVcpkgPaths(.static);
+        },
+        else => {},
+    }
+    exe.linkSystemLibrary("pcre2-8");
 }

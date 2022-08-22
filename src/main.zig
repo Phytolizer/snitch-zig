@@ -1,6 +1,8 @@
 const std = @import("std");
+const pcre = @import("pcre.zig");
 
 const Allocator = std.mem.Allocator;
+const Regex = pcre.Regex;
 
 const Todo = struct {
     allocator: Allocator,
@@ -49,9 +51,29 @@ const Todo = struct {
     }
 };
 
-fn lineAsTodo(line: []const u8) !?Todo {
-    _ = line;
-    return null;
+fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
+    var unreportedTodo = try Regex.compile("^(.*)TODO: (.*)$", .{});
+    defer unreportedTodo.deinit();
+
+    const groups = unreportedTodo.groups(allocator, line, 0, .{}) catch |e| switch (e) {
+        error.NoMatch => return null,
+        else => return e,
+    };
+    defer allocator.free(groups);
+    return try Todo.init(allocator, groups[1], groups[2], null, "", 0);
+}
+
+fn readLine(allocator: Allocator, reader: anytype) !?[]u8 {
+    var len: usize = 1024;
+    while (true) {
+        return reader.readUntilDelimiterOrEofAlloc(allocator, '\n', len) catch |e| switch (e) {
+            error.StreamTooLong => {
+                len *= 2;
+                continue;
+            },
+            else => return e,
+        };
+    }
 }
 
 fn todosOfFile(allocator: Allocator, path: []const u8) ![]Todo {
@@ -63,11 +85,11 @@ fn todosOfFile(allocator: Allocator, path: []const u8) ![]Todo {
     defer file.close();
 
     while (true) {
-        var line = try file.reader().readUntilDelimiterOrEofAlloc(allocator, '\n', 1024) orelse
+        var line = try readLine(allocator, file.reader()) orelse
             break;
         defer allocator.free(line);
 
-        if (try lineAsTodo(line)) |t| {
+        if (try lineAsTodo(allocator, line)) |t| {
             try todos.append(t);
         }
     }
@@ -81,10 +103,11 @@ fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
     else
         try std.fs.cwd().openIterableDir(dirpath, .{});
     defer dir.close();
-    var iter = dir.iterate();
+    var iter = try dir.walk(allocator);
+    defer iter.deinit();
     while (try iter.next()) |entry| {
         if (entry.kind == .File) {
-            const path = try std.fs.path.join(allocator, &.{ dirpath, entry.name });
+            const path = try std.fs.path.join(allocator, &.{ dirpath, entry.path });
             defer allocator.free(path);
             var fileTodos = try todosOfFile(allocator, path);
             defer allocator.free(fileTodos);
@@ -95,10 +118,14 @@ fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
 }
 
 fn listSubcommand(allocator: Allocator) !void {
-    var todos = try todosOfDir(allocator, ".");
-    defer allocator.free(todos);
-    for (todos) |*t| {
-        defer t.deinit();
+    var todos = try todosOfDir(allocator, "src");
+    defer {
+        for (todos) |*t| {
+            t.deinit();
+        }
+        allocator.free(todos);
+    }
+    for (todos) |t| {
         try std.io.getStdOut().writer().print("{s}\n", .{t});
     }
 }
