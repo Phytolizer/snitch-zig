@@ -30,7 +30,7 @@ const Todo = struct {
         };
     }
 
-    pub fn deinit(self: *Todo) void {
+    pub fn deinit(self: *const Todo) void {
         self.allocator.free(self.prefix);
         self.allocator.free(self.suffix);
         if (self.id) |id| {
@@ -97,7 +97,7 @@ fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
     return null;
 }
 
-const VisitError = Allocator.Error;
+const VisitError = Allocator.Error || std.fs.File.WriteError;
 
 fn VisitFn(comptime State: type) type {
     return struct {
@@ -124,12 +124,7 @@ fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type,
     }
 }
 
-fn visitTodo(todos: *std.ArrayList(Todo), t: Todo) VisitError!void {
-    try todos.append(t);
-}
-
-fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
-    var todos = std.ArrayList(Todo).init(allocator);
+fn walkTodosOfDir(allocator: Allocator, dirpath: []const u8, comptime State: type, visit: VisitFn(State)) !void {
     var dir = if (std.fs.path.isAbsolute(dirpath))
         try std.fs.openIterableDirAbsolute(dirpath, .{})
     else
@@ -141,23 +136,18 @@ fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
         if (entry.kind == .File) {
             const path = try std.fs.path.join(allocator, &.{ dirpath, entry.path });
             defer allocator.free(path);
-            try walkTodosOfFile(allocator, path, @TypeOf(&todos), .{ .cb = visitTodo, .state = &todos });
+            try walkTodosOfFile(allocator, path, State, visit);
         }
     }
-    return todos.toOwnedSlice();
+}
+
+fn visitTodo(_: void, t: Todo) VisitError!void {
+    defer t.deinit();
+    try std.io.getStdOut().writer().print("{s}\n", .{t});
 }
 
 fn listSubcommand(allocator: Allocator) !void {
-    var todos = try todosOfDir(allocator, ".");
-    defer {
-        for (todos) |*t| {
-            t.deinit();
-        }
-        allocator.free(todos);
-    }
-    for (todos) |t| {
-        try std.io.getStdOut().writer().print("{s}\n", .{t});
-    }
+    try walkTodosOfDir(allocator, ".", void, .{ .cb = visitTodo, .state = {} });
 }
 
 fn todo(comptime message: []const u8) noreturn {
