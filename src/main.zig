@@ -161,6 +161,7 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, args[1], "report")) {
         try reportSubcommand(allocator);
     } else {
-        std.debug.panic("`{s}` unknown command", .{args[1]});
+        std.debug.print("`{s}` unknown command\n", .{args[1]});
+        return error.InvalidUsage;
     }
 }
