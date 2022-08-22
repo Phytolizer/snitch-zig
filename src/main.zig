@@ -49,11 +49,28 @@ const Todo = struct {
     }
 };
 
-fn todosOfFile(allocator: Allocator, dirpath: []const u8) ![]Todo {
-    _ = dirpath;
+fn lineAsTodo(line: []const u8) !?Todo {
+    _ = line;
+    return null;
+}
+
+fn todosOfFile(allocator: Allocator, path: []const u8) ![]Todo {
     var todos = std.ArrayList(Todo).init(allocator);
-    try todos.append(try Todo.init(allocator, "// ", "khooy", "#42", "main.go", 10));
-    try todos.append(try Todo.init(allocator, "// ", "foo", null, "src/foo.go", 0));
+    var file = if (std.fs.path.isAbsolute(path))
+        try std.fs.openFileAbsolute(path, .{})
+    else
+        try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    while (true) {
+        var line = try file.reader().readUntilDelimiterOrEofAlloc(allocator, '\n', 1024) orelse
+            break;
+        defer allocator.free(line);
+
+        if (try lineAsTodo(line)) |t| {
+            try todos.append(t);
+        }
+    }
     return todos.toOwnedSlice();
 }
 
@@ -67,7 +84,9 @@ fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind == .File) {
-            var fileTodos = try todosOfFile(allocator, entry.name);
+            const path = try std.fs.path.join(allocator, &.{ dirpath, entry.name });
+            defer allocator.free(path);
+            var fileTodos = try todosOfFile(allocator, path);
             defer allocator.free(fileTodos);
             try todos.appendSlice(fileTodos);
         }
