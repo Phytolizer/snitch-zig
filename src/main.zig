@@ -49,11 +49,29 @@ const Todo = struct {
     }
 };
 
-fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
+fn todosOfFile(allocator: Allocator, dirpath: []const u8) ![]Todo {
     _ = dirpath;
     var todos = std.ArrayList(Todo).init(allocator);
     try todos.append(try Todo.init(allocator, "// ", "khooy", "#42", "main.go", 10));
     try todos.append(try Todo.init(allocator, "// ", "foo", null, "src/foo.go", 0));
+    return todos.toOwnedSlice();
+}
+
+fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
+    var todos = std.ArrayList(Todo).init(allocator);
+    var dir = if (std.fs.path.isAbsolute(dirpath))
+        try std.fs.openIterableDirAbsolute(dirpath, .{})
+    else
+        try std.fs.cwd().openIterableDir(dirpath, .{});
+    defer dir.close();
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind == .File) {
+            var fileTodos = try todosOfFile(allocator, entry.name);
+            defer allocator.free(fileTodos);
+            try todos.appendSlice(fileTodos);
+        }
+    }
     return todos.toOwnedSlice();
 }
 
