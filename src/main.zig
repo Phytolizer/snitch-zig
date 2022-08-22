@@ -51,7 +51,7 @@ const Todo = struct {
     }
 };
 
-fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
+fn lineAsUnreportedTodo(allocator: Allocator, line: []const u8) !?Todo {
     var unreportedTodo = try Regex.compile("^(.*)TODO: (.*)$", .{});
     defer unreportedTodo.deinit();
 
@@ -61,6 +61,18 @@ fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
     };
     defer allocator.free(groups);
     return try Todo.init(allocator, groups[1], groups[2], null, "", 0);
+}
+
+fn lineAsReportedTodo(allocator: Allocator, line: []const u8) !?Todo {
+    var reportedTodo = try Regex.compile("^(.*)TODO\\((.*)\\): (.*)$", .{});
+    defer reportedTodo.deinit();
+
+    const groups = reportedTodo.groups(allocator, line, 0, .{}) catch |e| switch (e) {
+        error.NoMatch => return null,
+        else => return e,
+    };
+    defer allocator.free(groups);
+    return try Todo.init(allocator, groups[1], groups[3], groups[2], "", 0);
 }
 
 fn readLine(allocator: Allocator, reader: anytype) !?[]u8 {
@@ -74,6 +86,15 @@ fn readLine(allocator: Allocator, reader: anytype) !?[]u8 {
             else => return e,
         };
     }
+}
+
+fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
+    if (try lineAsUnreportedTodo(allocator, line)) |t|
+        return t;
+    if (try lineAsReportedTodo(allocator, line)) |t|
+        return t;
+
+    return null;
 }
 
 fn todosOfFile(allocator: Allocator, path: []const u8) ![]Todo {
@@ -118,7 +139,7 @@ fn todosOfDir(allocator: Allocator, dirpath: []const u8) ![]Todo {
 }
 
 fn listSubcommand(allocator: Allocator) !void {
-    var todos = try todosOfDir(allocator, "src");
+    var todos = try todosOfDir(allocator, ".");
     defer {
         for (todos) |*t| {
             t.deinit();
