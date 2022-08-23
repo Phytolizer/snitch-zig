@@ -153,7 +153,10 @@ fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
     return null;
 }
 
-const VisitError = error{NotImplemented} || Allocator.Error || std.fs.File.WriteError;
+const VisitError = error{
+    NotImplemented,
+    StreamTooLong,
+} || Allocator.Error || std.fs.File.WriteError || std.fs.File.ReadError;
 
 fn VisitFn(comptime State: type) type {
     return struct {
@@ -224,6 +227,7 @@ fn reportSubcommand(allocator: Allocator, creds: GithubCredentials, repo: []cons
     errdefer reportedTodos.deinit();
 
     const State = struct {
+        allocator: Allocator,
         reportedTodos: std.ArrayList(Todo),
         creds: GithubCredentials,
         repo: []const u8,
@@ -236,8 +240,23 @@ fn reportSubcommand(allocator: Allocator, creds: GithubCredentials, repo: []cons
     const reportCb = struct {
         pub fn reportCb(state: *State, t: Todo) VisitError!void {
             if (t.id == null) {
+                var stdoutBuf = std.io.bufferedWriter(std.io.getStdOut().writer());
+                const stdout = stdoutBuf.writer();
+                try stdout.print("{s}\n", .{t});
+                try stdout.writeAll("Do you want to report this? [y/N] ");
+                try stdoutBuf.flush();
+                if (try readLine(state.allocator, std.io.getStdIn().reader())) |line| {
+                    defer state.allocator.free(line);
+                    if (!std.mem.eql(u8, line, "y")) {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+
                 const reportedTodo = try reportTodo(t, state.creds, state.repo);
-                try std.io.getStdOut().writer().print("[REPORTED] {s}\n", .{t});
+                try stdout.print("[REPORTED] {s}\n", .{reportedTodo});
+                try stdoutBuf.flush();
                 try state.reportedTodos.append(reportedTodo);
             }
         }
@@ -246,6 +265,7 @@ fn reportSubcommand(allocator: Allocator, creds: GithubCredentials, repo: []cons
     try walkTodosOfDir(allocator, ".", *State, .{
         .cb = reportCb,
         .state = &.{
+            .allocator = allocator,
             .reportedTodos = reportedTodos,
             .creds = creds,
             .repo = repo,
