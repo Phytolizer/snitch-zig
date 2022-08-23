@@ -1,10 +1,16 @@
 const std = @import("std");
 const pcre = @import("pcre.zig");
+const ini = @import("ini");
 
 const Allocator = std.mem.Allocator;
 const Regex = pcre.Regex;
 
-const panic = std.debug.panic;
+fn openFile(path: []const u8) std.fs.File.OpenError!std.fs.File {
+    if (std.fs.path.isAbsolute(path)) {
+        return std.fs.openFileAbsolute(path, .{});
+    }
+    return std.fs.cwd().openFile(path, .{});
+}
 
 const Todo = struct {
     allocator: Allocator,
@@ -53,13 +59,51 @@ const Todo = struct {
     }
 
     pub fn update(_: *Todo) !void {
-        panic("Todo.update() is not implemented", .{});
+        return error.NotImplemented;
     }
 };
 
 const GithubCredentials = struct {
-    pub fn fromFile(_: []const u8) !GithubCredentials {
-        return GithubCredentials{};
+    allocator: Allocator,
+    personalToken: []u8,
+
+    pub fn fromFile(allocator: Allocator, filepath: []const u8) !GithubCredentials {
+        const file = openFile(filepath) catch |e| {
+            std.debug.print("opening {s}: {s}\n", .{ filepath, @errorName(e) });
+            return e;
+        };
+        defer file.close();
+
+        var parser = ini.parse(allocator, file.reader());
+        defer parser.deinit();
+
+        var githubSection = false;
+        var personalToken: ?[]u8 = null;
+        while (try parser.next()) |record| {
+            switch (record) {
+                .section => |heading| {
+                    githubSection = std.mem.eql(u8, heading, "github");
+                },
+                .property => |kv| {
+                    if (githubSection and std.mem.eql(u8, kv.key, "personal_token")) {
+                        personalToken = try allocator.dupe(u8, kv.value);
+                    }
+                },
+                .enumeration => {},
+            }
+        }
+
+        if (personalToken) |tok| {
+            return GithubCredentials{
+                .allocator = allocator,
+                .personalToken = tok,
+            };
+        }
+        return error.NoPersonalToken;
+    }
+
+    pub fn deinit(self: *const GithubCredentials) void {
+        self.allocator.free(self.personalToken);
     }
 };
 
@@ -109,7 +153,7 @@ fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
     return null;
 }
 
-const VisitError = Allocator.Error || std.fs.File.WriteError;
+const VisitError = error{NotImplemented} || Allocator.Error || std.fs.File.WriteError;
 
 fn VisitFn(comptime State: type) type {
     return struct {
@@ -171,10 +215,11 @@ fn listSubcommand(allocator: Allocator) !void {
 }
 
 fn reportTodo(_: Todo, _: GithubCredentials) !Todo {
-    panic("reportTodo is not implemented", .{});
+    return error.NotImplemented;
 }
 
 fn reportSubcommand(allocator: Allocator, creds: GithubCredentials) !void {
+    defer creds.deinit();
     var reportedTodos = std.ArrayList(Todo).init(allocator);
     errdefer reportedTodos.deinit();
 
@@ -207,6 +252,18 @@ fn reportSubcommand(allocator: Allocator, creds: GithubCredentials) !void {
     }
 }
 
+fn getCredsPath(allocator: Allocator) ![]u8 {
+    if (std.os.getenv("XDG_CONFIG_HOME")) |xdg| {
+        return try std.fs.path.join(allocator, &.{ xdg, "snitch", "github.ini" });
+    }
+    if (std.os.getenv("HOME")) |home| {
+        return try std.fs.path.join(allocator, &.{ home, ".config", "snitch", "github.ini" });
+    }
+    var cwd = try std.process.getCwdAlloc(allocator);
+    defer allocator.free(cwd);
+    return try std.fs.path.join(allocator, &.{ cwd, "config", "github.ini" });
+}
+
 pub fn main() !void {
     var gpAllocator = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpAllocator.detectLeaks();
@@ -227,7 +284,9 @@ pub fn main() !void {
     if (std.mem.eql(u8, args[1], "list")) {
         try listSubcommand(allocator);
     } else if (std.mem.eql(u8, args[1], "report")) {
-        try reportSubcommand(allocator, try GithubCredentials.fromFile("~/.snitch/github.ini"));
+        const credsPath = try getCredsPath(allocator);
+        defer allocator.free(credsPath);
+        try reportSubcommand(allocator, try GithubCredentials.fromFile(allocator, credsPath));
     } else {
         std.debug.print("`{s}` unknown command\n", .{args[1]});
         return error.InvalidUsage;

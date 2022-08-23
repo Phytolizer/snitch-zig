@@ -1,0 +1,15 @@
+pkgs:
+  snitch:
+    version: 0.0.0
+    license: MIT
+    source_url: "https://github.com/Phytolizer/snitch-zig"
+    root: src/main.zig
+    files:
+      README.md
+      LICENSE
+deps:
+  ini:
+    git:
+      url: "https://github.com/ziglibs/ini.git"
+      ref: 0591af0178f9022cf50b9c50de07b8fe8f70f8b4
+      root: src/ini.zig
