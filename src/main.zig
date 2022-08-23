@@ -1,6 +1,7 @@
 const std = @import("std");
 const pcre = @import("pcre.zig");
 const ini = @import("ini");
+const curl = @import("curl.zig");
 
 const Allocator = std.mem.Allocator;
 const Regex = pcre.Regex;
@@ -156,7 +157,9 @@ fn lineAsTodo(allocator: Allocator, line: []const u8) !?Todo {
 const VisitError = error{
     NotImplemented,
     StreamTooLong,
-} || Allocator.Error || std.fs.File.WriteError || std.fs.File.ReadError;
+    FailedRequest,
+} || Allocator.Error || std.fs.File.WriteError ||
+    std.fs.File.ReadError || curl.Error;
 
 fn VisitFn(comptime State: type) type {
     return struct {
@@ -185,12 +188,6 @@ fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type,
 }
 
 fn walkTodosOfDir(allocator: Allocator, dirpath: []const u8, comptime State: type, visit: VisitFn(State)) !void {
-    defer switch (@typeInfo(State)) {
-        .Struct => if (@hasDecl(State, "deinit")) {
-            visit.state.deinit();
-        },
-        else => {},
-    };
     var dir = if (std.fs.path.isAbsolute(dirpath))
         try std.fs.openIterableDirAbsolute(dirpath, .{})
     else
@@ -217,8 +214,47 @@ fn listSubcommand(allocator: Allocator) !void {
     try walkTodosOfDir(allocator, ".", void, .{ .cb = visitTodo, .state = {} });
 }
 
-fn reportTodo(_: Todo, _: GithubCredentials, _: []const u8) !Todo {
-    return error.NotImplemented;
+fn reportTodo(allocator: Allocator, t: Todo, creds: GithubCredentials, repo: []const u8) !Todo {
+    var url = try std.mem.concat(allocator, u8, &.{ "https://api.github.com/repos/", repo, "/issues" });
+    defer allocator.free(url);
+    var jsonBody = std.json.ObjectMap.init(allocator);
+    defer jsonBody.deinit();
+    try jsonBody.put("title", .{ .String = t.suffix });
+    var strBody = try std.json.stringifyAlloc(allocator, .{ .title = t.suffix }, .{
+        .whitespace = .{
+            .indent = .None,
+            .separator = false,
+        },
+    });
+    defer allocator.free(strBody);
+
+    var headers = curl.Headers.init(allocator);
+    defer headers.deinit();
+
+    var tokenField = try std.mem.concat(allocator, u8, &.{ "token ", creds.personalToken });
+    defer allocator.free(tokenField);
+
+    try headers.append(.{ .name = "Authorization", .value = tokenField });
+    try headers.append(.{ .name = "Content-Type", .value = "application/json" });
+    try headers.append(.{ .name = "User-Agent", .value = "snitch" });
+
+    const response = try curl.post(url, .{
+        .allocator = allocator,
+        .headers = &headers,
+        .body = strBody,
+    });
+    defer response.deinit();
+
+    if (response.status != 200) {
+        for (response.headers.items) |h| {
+            std.debug.print("{s}: {s}", .{ h.name, h.value });
+        }
+        std.debug.print("Body:\n{s}\n", .{response.body.items});
+        std.debug.print("Status: {d}\n", .{response.status});
+        return error.FailedRequest;
+    }
+
+    return t;
 }
 
 fn reportSubcommand(allocator: Allocator, creds: GithubCredentials, repo: []const u8) !void {
@@ -254,7 +290,7 @@ fn reportSubcommand(allocator: Allocator, creds: GithubCredentials, repo: []cons
                     return;
                 }
 
-                const reportedTodo = try reportTodo(t, state.creds, state.repo);
+                const reportedTodo = try reportTodo(state.allocator, t, state.creds, state.repo);
                 try stdout.print("[REPORTED] {s}\n", .{reportedTodo});
                 try stdoutBuf.flush();
                 try state.reportedTodos.append(reportedTodo);
@@ -262,14 +298,16 @@ fn reportSubcommand(allocator: Allocator, creds: GithubCredentials, repo: []cons
         }
     }.reportCb;
 
+    var state = State{
+        .allocator = allocator,
+        .reportedTodos = reportedTodos,
+        .creds = creds,
+        .repo = repo,
+    };
+    defer state.deinit();
     try walkTodosOfDir(allocator, ".", *State, .{
         .cb = reportCb,
-        .state = &.{
-            .allocator = allocator,
-            .reportedTodos = reportedTodos,
-            .creds = creds,
-            .repo = repo,
-        },
+        .state = &state,
     });
 
     for (reportedTodos.items) |*t| {

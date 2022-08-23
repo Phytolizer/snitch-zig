@@ -17,6 +17,7 @@ pub fn build(b: *std.build.Builder) !void {
     exe.setTarget(target);
     exe.setBuildMode(mode);
     try linkPcre(exe);
+    linkCurl(exe);
     pkgs.addAllTo(exe);
     exe.install();
     exe.use_stage1 = true;
@@ -48,4 +49,38 @@ fn linkPcre(exe: *std.build.LibExeObjStep) !void {
         else => {},
     }
     exe.linkSystemLibrary("pcre2-8");
+}
+
+fn linkCurl(step: *std.build.LibExeObjStep) void {
+    var libs = if (builtin.os.tag == .windows) [_][]const u8{
+        "c",
+        "curl",
+        "bcrypt",
+        "crypto",
+        "crypt32",
+        "ws2_32",
+        "wldap32",
+        "ssl",
+        "psl",
+        "iconv",
+        "idn2",
+        "unistring",
+        "z",
+        "zstd",
+        "nghttp2",
+        "ssh2",
+        "brotlienc",
+        "brotlidec",
+        "brotlicommon",
+    } else [_][]const u8{ "c", "curl" };
+    for (libs) |i| {
+        step.linkSystemLibrary(i);
+    }
+    if (builtin.os.tag == .linux) {
+        step.linkSystemLibraryNeeded("libcurl");
+    }
+    if (builtin.os.tag == .windows) {
+        step.include_dirs.append(.{ .raw_path = "c:/msys64/mingw64/include" }) catch unreachable;
+        step.lib_paths.append("c:/msys64/mingw64/lib") catch unreachable;
+    }
 }
