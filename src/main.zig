@@ -138,6 +138,12 @@ fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type,
 }
 
 fn walkTodosOfDir(allocator: Allocator, dirpath: []const u8, comptime State: type, visit: VisitFn(State)) !void {
+    defer switch (@typeInfo(State)) {
+        .Struct => if (@hasDecl(State, "deinit")) {
+            visit.state.deinit();
+        },
+        else => {},
+    };
     var dir = if (std.fs.path.isAbsolute(dirpath))
         try std.fs.openIterableDirAbsolute(dirpath, .{})
     else
@@ -170,15 +176,19 @@ fn reportTodo(_: Todo, _: GithubCredentials) !Todo {
 
 fn reportSubcommand(allocator: Allocator, creds: GithubCredentials) !void {
     var reportedTodos = std.ArrayList(Todo).init(allocator);
-    defer reportedTodos.deinit();
+    errdefer reportedTodos.deinit();
 
     const State = struct {
-        reportedTodos: *std.ArrayList(Todo),
+        reportedTodos: std.ArrayList(Todo),
         creds: GithubCredentials,
+
+        pub fn deinit(self: *const @This()) void {
+            self.reportedTodos.deinit();
+        }
     };
 
     const reportCb = struct {
-        pub fn reportCb(state: State, t: Todo) VisitError!void {
+        pub fn reportCb(state: *State, t: Todo) VisitError!void {
             if (t.id == null) {
                 const reportedTodo = try reportTodo(t, state.creds);
                 try std.io.getStdOut().writer().print("[REPORTED] {s}\n", .{t});
@@ -187,9 +197,9 @@ fn reportSubcommand(allocator: Allocator, creds: GithubCredentials) !void {
         }
     }.reportCb;
 
-    try walkTodosOfDir(allocator, ".", State, .{
+    try walkTodosOfDir(allocator, ".", *State, .{
         .cb = reportCb,
-        .state = .{ .reportedTodos = &reportedTodos, .creds = creds },
+        .state = &.{ .reportedTodos = reportedTodos, .creds = creds },
     });
 
     for (reportedTodos.items) |*t| {
