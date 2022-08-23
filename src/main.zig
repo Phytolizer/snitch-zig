@@ -49,6 +49,16 @@ const Todo = struct {
         }
         try writer.print(": {s}", .{self.suffix});
     }
+
+    pub fn update(_: *Todo) !void {
+        todo("Todo.update() is not implemented", .{});
+    }
+};
+
+const GithubCredentials = struct {
+    pub fn fromFile(_: []const u8) !GithubCredentials {
+        return GithubCredentials{};
+    }
 };
 
 fn lineAsUnreportedTodo(allocator: Allocator, line: []const u8) !?Todo {
@@ -141,22 +151,50 @@ fn walkTodosOfDir(allocator: Allocator, dirpath: []const u8, comptime State: typ
     }
 }
 
-fn visitTodo(_: void, t: Todo) VisitError!void {
-    defer t.deinit();
-    try std.io.getStdOut().writer().print("{s}\n", .{t});
-}
-
 fn listSubcommand(allocator: Allocator) !void {
+    const visitTodo = struct {
+        pub fn visitTodo(_: void, t: Todo) VisitError!void {
+            defer t.deinit();
+            try std.io.getStdOut().writer().print("{s}\n", .{t});
+        }
+    }.visitTodo;
+
     try walkTodosOfDir(allocator, ".", void, .{ .cb = visitTodo, .state = {} });
 }
 
-fn todo(comptime message: []const u8) noreturn {
-    std.debug.panic(message, .{});
+const todo = std.debug.panic;
+
+fn reportTodo(_: Todo, _: GithubCredentials) !Todo {
+    todo("reportTodo is not implemented", .{});
 }
 
-fn reportSubcommand(allocator: Allocator) !void {
-    _ = allocator;
-    todo("report is not implemented");
+fn reportSubcommand(allocator: Allocator, creds: GithubCredentials) !void {
+    var reportedTodos = std.ArrayList(Todo).init(allocator);
+    defer reportedTodos.deinit();
+
+    const State = struct {
+        reportedTodos: *std.ArrayList(Todo),
+        creds: GithubCredentials,
+    };
+
+    const reportCb = struct {
+        pub fn reportCb(state: State, t: Todo) VisitError!void {
+            if (t.id == null) {
+                const reportedTodo = try reportTodo(t, state.creds);
+                try std.io.getStdOut().writer().print("[REPORTED] {s}\n", .{t});
+                try state.reportedTodos.append(reportedTodo);
+            }
+        }
+    }.reportCb;
+
+    try walkTodosOfDir(allocator, ".", State, .{
+        .cb = reportCb,
+        .state = .{ .reportedTodos = &reportedTodos, .creds = creds },
+    });
+
+    for (reportedTodos.items) |*t| {
+        try t.update();
+    }
 }
 
 pub fn main() !void {
@@ -168,7 +206,7 @@ pub fn main() !void {
 
     if (args.len < 2) {
         std.debug.print(
-            \\snitch [opt]
+            \\snitch <subcommand>
             \\    list: lists all TODOs in the current directory
             \\    report: reports TODOs in the current directory
             \\
@@ -179,7 +217,7 @@ pub fn main() !void {
     if (std.mem.eql(u8, args[1], "list")) {
         try listSubcommand(allocator);
     } else if (std.mem.eql(u8, args[1], "report")) {
-        try reportSubcommand(allocator);
+        try reportSubcommand(allocator, try GithubCredentials.fromFile("~/.snitch/github.ini"));
     } else {
         std.debug.print("`{s}` unknown command\n", .{args[1]});
         return error.InvalidUsage;
