@@ -4,6 +4,8 @@ const pcre = @import("pcre.zig");
 const Allocator = std.mem.Allocator;
 const Regex = pcre.Regex;
 
+const panic = std.debug.panic;
+
 const Todo = struct {
     allocator: Allocator,
     prefix: []u8,
@@ -51,7 +53,7 @@ const Todo = struct {
     }
 
     pub fn update(_: *Todo) !void {
-        todo("Todo.update() is not implemented", .{});
+        panic("Todo.update() is not implemented", .{});
     }
 };
 
@@ -162,10 +164,8 @@ fn listSubcommand(allocator: Allocator) !void {
     try walkTodosOfDir(allocator, ".", void, .{ .cb = visitTodo, .state = {} });
 }
 
-const todo = std.debug.panic;
-
 fn reportTodo(_: Todo, _: GithubCredentials) !Todo {
-    todo("reportTodo is not implemented", .{});
+    panic("reportTodo is not implemented", .{});
 }
 
 fn reportSubcommand(allocator: Allocator, creds: GithubCredentials) !void {
