@@ -131,6 +131,7 @@ fn walkTodosOfFile(allocator: Allocator, path: []const u8, comptime State: type,
         defer allocator.free(line);
 
         if (try lineAsTodo(allocator, line)) |t| {
+            defer t.deinit();
             try visit.cb(visit.state, t);
         }
     }
@@ -156,7 +157,6 @@ fn walkTodosOfDir(allocator: Allocator, dirpath: []const u8, comptime State: typ
 fn listSubcommand(allocator: Allocator) !void {
     const visitTodo = struct {
         pub fn visitTodo(_: void, t: Todo) VisitError!void {
-            defer t.deinit();
             try std.io.getStdOut().writer().print("{s}\n", .{t});
         }
     }.visitTodo;
